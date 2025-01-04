@@ -1,57 +1,76 @@
-import axios from 'axios';
-import { mediaManager } from 'wix-media-backend';
+const express = require('express');
+const puppeteer = require('puppeteer');
 
-const endpoint = 'https://pdf-d.onrender.com/';
+require('dotenv').config();
+const app = express();
+const port = process.env.PORT;
 
-export async function generatePDF(data, fileName) {
-    if (!data || !fileName) {
-        console.error('Invalid parameters: data and fileName are required');
-        return null;
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Function to generate a PDF from plain text
+async function exportTextAsPdf(text) {
+    const browser = await puppeteer.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+    const page = await browser.newPage();
+
+    // Generate a simple HTML structure with the provided text
+    const htmlContent = `
+        <html>
+            <head>
+                <style>
+                    body {
+                        font-family: Arial, sans-serif;
+                        line-height: 1.6;
+                        margin: 20px;
+                    }
+                </style>
+            </head>
+            <body>
+                ${text.replace(/\n/g, '<br>')}
+            </body>
+        </html>
+    `;
+
+    await page.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
+
+    const pdfBuffer = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+    });
+
+    await browser.close();
+    return pdfBuffer;
+}
+
+app.post('/pdf', async (req, res) => {
+    const { url, text } = req.body;
+
+    if (!url && !text) {
+        return res.status(400).send({ error: 'Either URL or text is required' });
     }
 
     try {
-        const buffer = await fetchPDFBuffer(data);
-        if (!buffer) throw new Error('Failed to fetch PDF buffer');
-        
-        const uploadResult = await uploadPDF(buffer, fileName);
-        console.log(`PDF uploaded successfully: ${uploadResult.fileUrl}`);
-        return uploadResult;
-    } catch (error) {
-        console.error('Error in generatePDF:', error.stack);
-        return null;
-    }
-}
+        let pdfBuffer;
 
-async function fetchPDFBuffer(data) {
-    try {
-        const response = await axios.post(endpoint, data, { responseType: 'arraybuffer' });
-
-        if (response.status === 200) {
-            return response.data;
-        } else {
-            console.error('Request failed with status:', response.status);
-            return null;
+        if (url) {
+            console.log(`Generating PDF for URL: ${url}`);
+            pdfBuffer = await exportWebsiteAsPdf(url);
+        } else if (text) {
+            console.log(`Generating PDF for text content`);
+            pdfBuffer = await exportTextAsPdf(text);
         }
-    } catch (error) {
-        console.error('Error fetching PDF buffer:', error.stack);
-        return null;
-    }
-}
 
-function uploadPDF(buffer, fileName) {
-    return mediaManager.upload(
-        '/myUploadFolder/subfolder',
-        buffer,
-        `${fileName}.pdf`,
-        {
-            mediaOptions: {
-                mimeType: 'application/pdf',
-                mediaType: 'document',
-            },
-            metadataOptions: {
-                isPrivate: false,
-                isVisitorUpload: false,
-            },
-        }
-    );
-}
+        res.set({
+            'Content-Type': 'application/pdf',
+            'Content-Disposition': 'attachment; filename="generated.pdf"',
+        });
+        res.send(pdfBuffer);
+    } catch (error) {
+        console.error('Error generating PDF:', error.stack);
+        res.status(500).send({ error: 'Failed to generate PDF' });
+    }
+});
+
+app.listen(port, () => {
+    console.log(`Server is running on http://localhost:${port}`);
+});
